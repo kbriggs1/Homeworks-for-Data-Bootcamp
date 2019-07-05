@@ -1,48 +1,59 @@
+import datetime as dt
+from dateutil.relativedelta import relativedelta
 import numpy as np
 import pandas as pd
-import datetime as dt
+
 import sqlalchemy
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, func
+from sqlalchemy import desc
+
 from flask import Flask, jsonify
 
-engine = create_engine("sqlite:///Resources/hawaii.sqlite", connect_args={'check_same_thread': False})
 
+#################################################
+# Database Setup
+#################################################
+engine = create_engine("sqlite:///Resources/hawaii.sqlite")
 
+# reflect an existing database into a new model
 Base = automap_base()
+# reflect the tables
 Base.prepare(engine, reflect=True)
-Base.classes.keys()
 
+#print(Base.classes.keys())
+
+# Save reference to the table
 Measurement = Base.classes.measurement
 Station = Base.classes.station
 
+# Create our session (link) from Python to the DB
 session = Session(engine)
 
-#weather app
+#set start date to 8/31/2018.
+st_date_str = "2017-08-31" 
+#print(type(st_date_str))
+st_date = dt.datetime.strptime(st_date_str, '%Y-%m-%d')
+
+#create varialble to store date as start_date - 1 year
+##dateprevyr = dt.date.today() - relativedelta(years=1)
+dateprevyr = st_date - relativedelta(years=1)
+print("Date from 1 year - prev year date", dateprevyr)
+
+
+#################################################
+# Flask Setup
+#################################################
 app = Flask(__name__)
 
-
-latestDate = (session.query(Measurement.date)
-                .order_by(Measurement.date.desc())
-                .first())
-latestDate = list(np.ravel(latestDate))[0]
-
-latestDate = dt.datetime.strptime(latestDate, '%Y-%m-%d')
-latestYear = int(dt.datetime.strftime(latestDate, '%Y'))
-latestMonth = int(dt.datetime.strftime(latestDate, '%m'))
-latestDay = int(dt.datetime.strftime(latestDate, '%d'))
-
-yearBefore = dt.date(latestYear, latestMonth, latestDay) - dt.timedelta(days=365)
-yearBefore = dt.datetime.strftime(yearBefore, '%Y-%m-%d')
-
-
-
+#################################################
+# Flask Routes
+#################################################
 
 @app.route("/")
-def home():
-    return (f"Welcome to Surf's Up!: Hawai'i Climate API<br/>"
-             """List all available api routes."""
+def welcome():
+    """List all available api routes."""
     return (
         f" Available Routes:<br/>"
         f"/api/v1.0/precipitation<br/>"
@@ -51,84 +62,122 @@ def home():
         f"/api/v1.0/yyyy-mm-dd/yyyy-mm-dd<br/>"
         f"/api/v1.0/yyyy-mm-dd<br/>"
     )
-@app.route("/api/v1.0/stations")
-def stations():
-    results = session.query(Station.name).all()
-    all_stations = list(np.ravel(results))
-    return jsonify(all_stations)
 
-@app.route("/api/v1.0/precipitaton")
+
+@app.route("/api/v1.0/precipitation")
 def precipitation():
-    
-    results = (session.query(Measurement.date, Measurement.prcp, Measurement.station)
-                      .filter(Measurement.date > yearBefore)
-                      .order_by(Measurement.date)
-                      .all())
-    
-    precipData = []
-    for result in results:
-        precipDict = {result.date: result.prcp, "Station": result.station}
-        precipData.append(precipDict)
-
-    return jsonify(precipData)
-
-@app.route("/api/v1.0/temperature")
-def temperature():
-
-    results = (session.query(Measurement.date, Measurement.tobs, Measurement.station)
-                      .filter(Measurement.date > yearBefore)
-                      .order_by(Measurement.date)
-                      .all())
-
-    tempData = []
-    for result in results:
-        tempDict = {result.date: result.tobs, "Station": result.station}
-        tempData.append(tempDict)
-
-    return jsonify(tempData)
-    
     """Query dates and tempereature observations for 1 year from
        Date provided.
     """ 
+    #set start date. 
+    st_date_str = "2017-08-31" 
+    #print(type(st_date_str))
+    st_date = dt.datetime.strptime(st_date_str, '%Y-%m-%d')
+    print(st_date)
+    
+    # Calculate the date 1 year ago from today.
+    dateprevyr = st_date - relativedelta(years=1)
+    print(dateprevyr)
+    
+    precip_data = session.query(Measurement.date,Measurement.prcp).\
+                       filter(Measurement.date > dateprevyr).all()
+    date_lst=list()
+    prcp_lst=list()
+    cnt=0
+    for row in precip_data:
+        cnt+=1
+        date_lst.append(row.date)
+        prcp_lst.append(row.prcp)
+        if cnt % 200 == 0 :
+            print(row.date, row.prcp)
+    
+    #type(precip_data)
+    #print("Count of rows: ", str(cnt))
+    precip_data_dict={"date":date_lst,"Precipitation":prcp_lst}
+    
+    return jsonify(precip_data_dict)
 
-@app.route('/api/v1.0/datesearch/<startDate>')
-def start(startDate):
-    sel = [Measurement.date, func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs)]
+@app.route("/api/v1.0/stations")
+def stations():
+    #Retrieve list of unique stations fro the measurement table. 
+    station_list = session.query(Measurement.station).distinct().all()
+    return jsonify(station_list)
 
-    results =  (session.query(*sel)
-                       .filter(func.strftime("%Y-%m-%d", Measurement.date) >= startDate)
-                       .group_by(Measurement.date)
-                       .all())
+@app.route("/api/v1.0/tobs")
+def tobs():
+    # Query the last 12 months of temperature observation data for this station.
+    # Filter by the station with the highest number of observation.
+    station_temps = session.query(Measurement.tobs).\
+                    filter(Measurement.date > dateprevyr).\
+                    all()
+    return jsonify(station_temps)
 
-    dates = []                       
-    for result in results:
-        date_dict = {}
-        date_dict["Date"] = result[0]
-        date_dict["Low Temp"] = result[1]
-        date_dict["Avg Temp"] = result[2]
-        date_dict["High Temp"] = result[3]
-        dates.append(date_dict)
-    return jsonify(dates)
 
-@app.route('/api/v1.0/datesearch/<startDate>/<endDate>')
-def startEnd(startDate, endDate):
-    sel = [Measurement.date, func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs)]
+@app.route("/api/v1.0/<start>/<end>")
+def tempst(start,end):
+    #Calculate minimun temp, avg temp and max temp for date >= start date. TBD
+    #st_date_inp  = input("input a start date in yyyy-mm-dd format")
+    #end_date_inp = input("input an end  date in yyyy-mm-dd format")
+    st_date_inp  = start
+    end_date_inp = end
+    #Try except for start date.
+    try:
+        st_date_conv =  dt.datetime.strptime(st_date_inp, '%Y-%m-%d')
+        
+    #   print(st_date_conv,end_date_conv)
+    except:
+        print(" Invalid start date or date format. Please input valid date in yyyy-mm-dd format.")
+        print(" Using default date. start = 2017-08-21")
+        print("start date input: " + st_date_inp)
+        print(" ")
+        st_date_inp   = '2017-08-21'
+        st_date_conv  = dt.datetime.strptime(st_date_inp, '%Y-%m-%d')
+        
+    #Try except for end date.
+    try:
+        end_date_conv = dt.datetime.strptime(end_date_inp, '%Y-%m-%d')
+    except: 
+        print(" Invalid end date or date format. Please input valid date in yyyy-mm-dd format.")
+        print(" Using default  end date = current date")
+        print("end date input:" + end_date_inp)
+        print(" ")
+        end_date_conv = dt.datetime.today().strftime('%Y-%m-%d')
 
-    results =  (session.query(*sel)
-                       .filter(func.strftime("%Y-%m-%d", Measurement.date) >= startDate)
-                       .filter(func.strftime("%Y-%m-%d", Measurement.date) <= endDate)
-                       .group_by(Measurement.date)
-                       .all())
+    
+    print(st_date_conv, end_date_conv)
+    #Calculate minimum temp, avg temp and max temp in between  given 
+    #start date and end date. 
+    Meas_temp_st = session.query(func.min(Measurement.tobs),func.avg(Measurement.tobs),func.max(Measurement.tobs)).\
+                     filter(Measurement.date >= st_date_conv).\
+                     filter(Measurement.date <= end_date_conv).\
+                     all()
+    return jsonify(Meas_temp_st)
 
-    dates = []                       
-    for result in results:
-        date_dict = {}
-        date_dict["Date"] = result[0]
-        date_dict["Low Temp"] = result[1]
-        date_dict["Avg Temp"] = result[2]
-        date_dict["High Temp"] = result[3]
-        dates.append(date_dict)
-    return jsonify(dates)
+@app.route("/api/v1.0/<start>")
+def tempstartonly(start):
+    #Calculate minimun temp, avg temp and max temp for date >= start date. 
+    #st_date_inp  = input("input a start date in yyyy-mm-dd format")
+    st_date_inp  = start
+    #Try except for start date.
+    try:
+        st_date_conv =  dt.datetime.strptime(st_date_inp, '%Y-%m-%d')
+    #   print(st_date_conv,end_date_conv)
 
-if __name__ == "__main__":
+    except:
+        print(" Invalid start date or date format. Please input valid date in yyyy-mm-dd format.")
+        print(" Using default date. start = 2017-08-21")
+        print("start date input: " + st_date_inp)
+        st_date_inp   = '2017-08-21'
+        st_date_conv  = dt.datetime.strptime(st_date_inp, '%Y-%m-%d')
+        
+    print(st_date_conv)
+    #Calculate minimum temp, avg temp and max temp for date >= start date.  
+    Meas_temp_st = session.query(func.min(Measurement.tobs),func.avg(Measurement.tobs),func.max(Measurement.tobs)).\
+                     filter(Measurement.date >= st_date_conv).\
+                     all()
+    return jsonify(Meas_temp_st)
+
+
+    
+if __name__ == '__main__':
     app.run(debug=True)
